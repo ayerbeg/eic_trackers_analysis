@@ -33,6 +33,12 @@ All dependencies are available in the standard EIC software environment.
 
 ## How to run
 
+Before running this macro, please read the instruction of how to install and run the EIC shell in:
+
+https://jeffersonlab.github.io/meson-structure/ 
+
+THIS MACRO ONLY RUNS IN THE EIC SHELL
+
 ```bash
 # Full run (all events, all files)
 root -x -l -b -q lambda_analysis.cxx
