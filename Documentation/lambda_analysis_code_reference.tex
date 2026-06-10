@@ -1,0 +1,667 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{xcolor}
+\usepackage{mdframed}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{array}
+\usepackage{longtable}
+\geometry{margin=1in}
+\setstretch{1.15}
+
+\lstset{
+  language=C++,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue!70}\bfseries,
+  commentstyle=\color{green!50!black}\itshape,
+  stringstyle=\color{red!60},
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!5},
+  numbers=none,
+  xleftmargin=6pt,
+  xrightmargin=6pt
+}
+
+\newcommand{\sth}{\sigma_\theta}
+\newcommand{\sal}{\sigma_\alpha}
+\newcommand{\sz}{\sigma_z}
+\newcommand{\sx}{\sigma_x}
+\newcommand{\Lam}{\Lambda}
+\newcommand{\ppi}{\pi^-}
+
+\newmdenv[backgroundcolor=blue!5,linecolor=blue!40,linewidth=1pt,
+  roundcorner=4pt,innertopmargin=6pt,innerbottommargin=6pt,
+  innerleftmargin=8pt,innerrightmargin=8pt]{notebox}
+\newmdenv[backgroundcolor=orange!7,linecolor=orange!50,linewidth=1pt,
+  roundcorner=4pt,innertopmargin=6pt,innerbottommargin=6pt,
+  innerleftmargin=8pt,innerrightmargin=8pt]{warnbox}
+
+\title{\textbf{\texttt{lambda\_analysis.cxx}\\Code Reference Manual}\\[6pt]
+       \large EIC $\Lambda \to p + \pi^-$ Analysis --- Far-Forward Region}
+\author{C.\ Ayerbe Gayoso, with assistance from Claude (Anthropic)}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+%=============================================================
+\section{Overview}
+%=============================================================
+
+\texttt{lambda\_analysis.cxx} is a ROOT macro that analyses
+$\Lambda \to p + \pi^-$ decays in the EIC far-forward region. It reads
+Monte Carlo truth from PODIO/EDM4hep files produced by the EIC simulation
+framework (dd4hep/GEANT4), fills histograms, and produces three output
+PDF files plus one ROOT file containing all histograms. 
+
+Initial version: Dmitry Romanov from the EIC Meson Structure Working Group
+\url{ https://github.com/JeffersonLab/meson-structure/blob/main/tutorials/cpp_01_read_edm4eic.cxx}
+
+\subsection{How to run}
+
+Before running this macro, please read the instruction of how to install and run the EIC shell in \url{https://jeffersonlab.github.io/meson-structure/}. 
+
+\textbf{THIS MACRO ONLY RUNS IN THE EIC SHELL}
+
+\begin{lstlisting}
+# Interactive ROOT session
+root -x -l lambda_analysis.cxx
+root [0] lambda_analysis()         // all events, all files
+root [0] lambda_analysis(500)      // 500 events per file (quick test)
+
+# Batch mode (no GUI, faster, recommended for full runs)
+root -x -l -b -q lambda_analysis.cxx
+\end{lstlisting}
+
+\subsection{Dependencies}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Library & Purpose \\
+\midrule
+PODIO (\texttt{podioDict}, \texttt{podioRootIO}) & Reading EDM4hep event frames \\
+EDM4hep (\texttt{libedm4hepDict}) & MC particle data model \\
+\texttt{fmt} & Formatted printing to stdout \\
+ROOT (standard) & Histograms, canvases, files, TProfile \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Output files}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+File & Contents \\
+\midrule
+\texttt{lambda\_analysis\_18x275.root} & All histograms (reopen to replot) \\
+\texttt{lambda\_analysis\_18x275.pdf} & Diagnostic + particle analysis plots \\
+\texttt{tracker\_study\_18x275.pdf} & Tracker resolution study (12 pages) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%=============================================================
+\section{Configuration Namespaces}
+%=============================================================
+
+All tunable parameters live in two namespaces at the top of the file.
+\textbf{No other part of the code needs to be changed to adjust cuts or
+tracker geometry.}
+
+\subsection{\texttt{namespace Cuts}}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{lll}
+\toprule
+Constant & Value & Meaning \\
+\midrule
+\texttt{LAMBDA\_PDG} & 3122 & PDG code of the $\Lambda$ baryon \\
+\texttt{LAMBDA\_PRIMARY\_IDX} & 4 & MC particle index of primary $\Lambda$ \\
+\texttt{LAMBDA\_N\_DAUGHTERS} & 2 & Selects charged decay ($p + \pi^-$) \\
+\texttt{DECAY\_Z\_MIN} & 20800\,mm & Last beamline magnet exit \\
+\texttt{DECAY\_Z\_MAX} & 35000\,mm & ZDC face \\
+\texttt{ZDC\_Z} & 35000\,mm & ZDC face (used for projection) \\
+\texttt{CROSSING\_ANGLE} & 25\,mrad & Hadron beam crossing angle \\
+\texttt{PDG\_PROTON} & 2212 & PDG code of proton \\
+\texttt{PDG\_PION\_MINUS} & $-211$ & PDG code of $\pi^-$ \\
+\texttt{PDG\_NEUTRON} & 2112 & PDG code of neutron \\
+\texttt{PDG\_PION\_ZERO} & 111 & PDG code of $\pi^0$ \\
+\texttt{N\_FILES} & 20 & Number of input ROOT files \\
+\texttt{FILE\_PATTERN} & path template & \texttt{fmt::format} pattern \\
+\texttt{OUTPUT\_PDF} & string & Base name for analysis PDF \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{warnbox}
+\texttt{LAMBDA\_PRIMARY\_IDX = 4} is generator-dependent. If the
+simulation configuration changes, this index must be updated. Verify
+by running with a small sample and checking the \texttt{[NON-PRIMARY]}
+diagnostic output (see Section~\ref{sec:counters}).
+\end{warnbox}
+
+\subsection{\texttt{namespace Tracker}}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{lll}
+\toprule
+Constant & Value & Meaning \\
+\midrule
+\texttt{N\_PLANES} & 4 & Number of tracking planes \\
+\texttt{LENGTH} & 2000\,mm & Total tracker length (plane 1 to plane 4) \\
+\texttt{STANDOFF} & 500\,mm & Gap from ZDC face to last plane \\
+\texttt{SIGMA\_X[]} & 0.05--1.0\,mm & Five pitch scenarios \\
+\texttt{N\_SC} & 5 & Number of scenarios \\
+\texttt{LABELS[]} & strings & ROOT title labels per scenario \\
+\texttt{EFF\_THRESH[]} & 500, 1000, 2000\,mm & Efficiency thresholds \\
+\texttt{N\_THRESH} & 3 & Number of thresholds \\
+\texttt{PRIMARY\_THRESH} & 1 & Index of primary threshold (1000\,mm) \\
+\texttt{OUTPUT\_PDF} & string & Base name for tracker study PDF \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%=============================================================
+\section{Global State}
+%=============================================================
+
+\begin{description}
+  \item[\texttt{map<string, TH1*> H}] --- Global histogram registry.
+        All histograms are stored here by name. Access via the typed
+        helpers \texttt{h1()} and \texttt{h2()} (see Section~\ref{sec:histmap}).
+
+  \item[\texttt{string current\_file}] --- Set to the filename currently
+        being processed by \texttt{process\_file()}. Used in diagnostic
+        print statements to identify which file contains anomalous events.
+
+  \item[\texttt{Counters counters}] --- Global instance of the
+        \texttt{Counters} struct. Incremented throughout
+        \texttt{process\_event()} and printed at the end of the run.
+\end{description}
+
+%=============================================================
+\section{Global Functions (Physics Utilities)}
+%=============================================================
+
+\subsection{\texttt{sigma\_theta\_rad(sigma\_x\_mm)}}
+
+Returns angular resolution [rad] assuming all $N=4$ planes resolve the
+tracks (best case). Retained for documentation and the summary table.
+In the event loop, use \texttt{sigma\_theta\_eff()} instead.
+
+\subsection{\texttt{plane\_z(ip)}}
+
+Returns the absolute $z$ position [mm] of tracker plane \texttt{ip}
+(1-indexed). Planes are equally spaced:
+\[
+  z_1 = 32{,}500\,\text{mm}, \quad z_4 = 34{,}500\,\text{mm}
+\]
+
+\subsection{\texttt{sigma\_theta\_eff(sigma\_x\_mm, first\_plane)}}
+
+Returns the effective angular resolution [rad] using only planes from
+\texttt{first\_plane} to \texttt{N\_PLANES}. Returns $10^9$ (sentinel
+= unresolvable) when fewer than 2 planes are available.
+
+\begin{center}
+\begin{tabular}{cccc}
+\toprule
+\texttt{first\_plane} & $N_\text{eff}$ & $L_\text{eff}$ (mm)
+    & Relative $\sth$ \\
+\midrule
+1 & 4 & 2000 & 1.0 (best) \\
+2 & 3 & 1333 & 1.15 \\
+3 & 2 & 667  & 1.58 \\
+4 & 1 & 0    & $\infty$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{\texttt{PolarAngle(px, py, pz)}}
+Returns $\theta = \arccos(p_z/|\vec{p}|)$ in degrees.
+
+\subsection{\texttt{PhiAngle(px, py)}}
+Returns $\phi = \text{atan2}(p_y, p_x)$ in degrees.
+
+\subsection{\texttt{OpeningAngle(a, b)}}
+Returns the opening angle between two \texttt{DaughterKin} objects in
+degrees, from the dot product of unit momentum vectors.
+
+%=============================================================
+\section{Data Structures}
+%=============================================================
+
+\subsection{\texttt{struct DaughterKin}}
+
+Holds kinematic quantities for one decay daughter projected onto the ZDC
+plane. Computed by \texttt{compute()}.
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{lll}
+\toprule
+Member & Unit & Meaning \\
+\midrule
+\texttt{theta} & degrees & Polar angle w.r.t.\ $z$-axis \\
+\texttt{phi} & degrees & Azimuthal angle \\
+\texttt{xAtZDC}, \texttt{yAtZDC} & mm & Position at ZDC face (lab frame) \\
+\texttt{radius} & mm & $\sqrt{x^2+y^2}$ in lab frame \\
+\texttt{xBC}, \texttt{yBC} & mm & Position relative to hadron beam axis \\
+\texttt{radiusBC} & mm & Distance from beam axis \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The vertex offset (crossing angle) is applied inside \texttt{compute()}
+using the true decay vertex position $(x_v, y_v, z_v)$.
+\texttt{isSet()} returns \texttt{true} if \texttt{theta != 0}.
+
+\subsection{\texttt{struct Counters}}
+\label{sec:counters}
+
+Tracks particle counts at each selection stage. Printed to stdout by
+\texttt{counters.print()} at the end of the run.
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{ll}
+\toprule
+Member & Counts \\
+\midrule
+\texttt{total\_events} & Events read from all files \\
+\texttt{lambda\_escaped} & Primary $\Lambda$ with no daughters \\
+\texttt{lambda\_before\_magnet} & Primary $\Lambda$ decaying before 20.8\,m \\
+\texttt{lambda\_beyond\_zdc} & Primary $\Lambda$ decaying past 35\,m \\
+\texttt{lambda\_field\_free} & Primary $\Lambda$ in field-free window (any channel) \\
+\texttt{lambda\_charged} & Field-free, charged channel $p+\pi^-$ [used] \\
+\texttt{lambda\_neutral} & Field-free, neutral channel $n+\pi^0$ [not used] \\
+\texttt{lambda\_other\_ndau} & Field-free, material interactions ($N_\text{dau}>2$) \\
+\texttt{proton} & Protons found in charged channel \\
+\texttt{pion\_minus} & $\pi^-$ found in charged channel \\
+\texttt{neutron} & Neutrons (neutral channel, informational) \\
+\texttt{pion\_zero} & $\pi^0$ (neutral channel, informational) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%=============================================================
+\section{Histogram Registry}
+\label{sec:histmap}
+%=============================================================
+
+\subsection{Design}
+
+All histograms live in \texttt{map<string, TH1*> H}. Two typed accessors
+avoid casting at every fill site:
+\begin{lstlisting}
+inline TH1F* h1(const string& name) { return static_cast<TH1F*>(H.at(name)); }
+inline TH2F* h2(const string& name) { return static_cast<TH2F*>(H.at(name)); }
+\end{lstlisting}
+
+For \texttt{TProfile} histograms, cast explicitly at the fill site:
+\begin{lstlisting}
+static_cast<TProfile*>(H.at("ResZ_rms_vsAlpha_sc0"))->Fill(alpha, dz);
+\end{lstlisting}
+
+\subsection{How to add a new histogram}
+\label{sec:add_histogram}
+
+\begin{enumerate}
+  \item In \texttt{book\_histograms()}: add one line:
+\begin{lstlisting}
+H["MyHist"] = new TH1F("MyHist", "Title;X;Y", 100, 0, 100);
+\end{lstlisting}
+  \item In \texttt{process\_event()}: fill it where the quantity is computed:
+\begin{lstlisting}
+h1("MyHist")->Fill(my_value);
+\end{lstlisting}
+  \item In \texttt{plot()} or \texttt{plot\_tracker\_study()}: draw it.
+  \item It is automatically written to the ROOT file by
+        \texttt{save\_histograms()} --- no extra step needed.
+\end{enumerate}
+
+\subsection{Complete histogram table}
+
+\subsubsection*{Lambda kinematics}
+\begin{longtable}{p{4.5cm}lp{6cm}}
+\toprule
+Key & Type & Contents \\
+\midrule
+\texttt{LambdaEnd} & TH1F & Decay endpoint $z$, all $\Lambda$ with 2 parents [0--35\,m] \\
+\texttt{LambdaEnd\_1} & TH1F & Decay endpoint [0--6\,m] \\
+\texttt{LambdaEnd\_2} & TH1F & Decay endpoint [6--20.8\,m] \\
+\texttt{LambdaEnd\_3} & TH1F & Decay endpoint, primary $\Lambda$, field-free, any channel \\
+\texttt{LambdaEnd\_analysis} & TH1F & Decay endpoint, primary, field-free, charged channel only.
+                                      Integral = \texttt{counters.lambda\_charged} \\
+\texttt{LambdaGenZ} & TH1F & Production vertex $z$ \\
+\texttt{LambdaZnoDaughters} & TH1F & Endpoint of escaped $\Lambda$ (no daughters) \\
+\texttt{LambdaAngleGen} & TH1F & Polar angle at production \\
+\bottomrule
+\end{longtable}
+
+\subsubsection*{Proton daughters}
+\texttt{Vertex\_p}, \texttt{Endpoint\_p}, \texttt{Theta\_p},
+\texttt{XYatZDC\_p} (TH2F, lab), \texttt{XYatZDC\_p\_BC} (TH2F, beam-centred),
+\texttt{ZvsTheta\_p}, \texttt{ZvsRadius\_p}.
+
+\subsubsection*{Pion daughters}
+Same set with \texttt{\_pi} suffix.
+
+\subsubsection*{Neutral channel (informational)}
+\texttt{Vertex\_n}, \texttt{Endpoint\_n}, \texttt{Theta\_n},
+\texttt{XYatZDC\_n} for neutrons; same with \texttt{\_pi0} for $\pi^0$.
+
+\subsubsection*{Correlations}
+\texttt{ThetaCorr} (TH2F), \texttt{RadiusSumVsZ} (TH2F),
+\texttt{DeltaR}, \texttt{OpenAngle}, \texttt{DeltaRvsZ} (TH2F).
+
+\subsubsection*{Tracker study: $\Delta R$ at planes (truth)}
+\begin{longtable}{p{4.5cm}lp{6cm}}
+\toprule
+Key & Type & Contents \\
+\midrule
+\texttt{DeltaR\_pl\{1-4\}} & TH1F & Track separation at plane $i$, full range [0--250\,mm] \\
+\texttt{DeltaR\_pl\{1-4\}\_zoom} & TH1F & Track separation at plane $i$, zoomed [0--3\,mm],
+                                           0.05\,mm/bin. Shows sub-mm region where pitch matters \\
+\bottomrule
+\end{longtable}
+
+\subsubsection*{Tracker study: analytical (suffix \texttt{\_sc0} to \texttt{\_sc4})}
+\begin{longtable}{p{4.5cm}lp{6cm}}
+\toprule
+Key & Type & Contents \\
+\midrule
+\texttt{SigmaZ\_sc\{i\}} & TH1F & $\sigma_z$ distribution [0--5000\,mm] \\
+\texttt{SigmaAlpha\_sc\{i\}} & TH1F & $\sigma_\alpha$ distribution [0--5\,mrad] \\
+\texttt{SigmaZ\_vsAlpha\_sc\{i\}} & TH2F & $\sigma_z$ vs true $\alpha$ [0--15\,mrad] \\
+\texttt{SigmaZ\_vsD\_sc\{i\}} & TH2F & $\sigma_z$ vs $D_\text{eff}$ \\
+\bottomrule
+\end{longtable}
+
+\subsubsection*{Tracker study: smearing (suffix \texttt{\_sc0} to \texttt{\_sc4})}
+\begin{longtable}{p{4.8cm}lp{5.7cm}}
+\toprule
+Key & Type & Contents \\
+\midrule
+\texttt{ResZ\_sc\{i\}} & TH1F & $z_\text{reco} - z_\text{true}$ residual \\
+\texttt{ResAlpha\_sc\{i\}} & TH1F & $\alpha_\text{reco} - \alpha_\text{true}$ residual \\
+\texttt{ResZ\_vsAlpha\_sc\{i\}} & TH2F & $\Delta z$ vs true $\alpha$ [0--15\,mrad].
+                                         Use \texttt{ProjectionY(name,b,b)} to get
+                                         the $\Delta z$ distribution per $\alpha$ bin \\
+\texttt{ZReco\_sc\{i\}} & TH1F & Reconstructed vertex $z$ [15--40\,m] \\
+\texttt{SmearEff\_thr\{j\}\_sc\{i\}} & TH1F & Pass/fail histogram for
+                                              $|\Delta z| < \texttt{EFF\_THRESH[j]}$.
+                                              \texttt{GetBinContent(2)/GetEntries()}
+                                              = precision efficiency \\
+\texttt{ResZ\_rms\_vsAlpha\_sc\{i\}} & TProfile & TProfile(``S'') of $\Delta z$ vs $\alpha$.
+                                                   Filled but not used for plotting;
+                                                   plotting uses \texttt{ProjectionY}
+                                                   of \texttt{ResZ\_vsAlpha} instead \\
+\bottomrule
+\end{longtable}
+
+%=============================================================
+\section{Functions Reference}
+%=============================================================
+
+\subsection{\texttt{book\_histograms()}}
+
+Called once at startup. Creates every histogram in \texttt{H}. All
+booking is here --- change ranges or binning only in this function.
+
+\subsection{\texttt{process\_event(event, event\_number)}}
+
+Main event processing function. Called once per MC event.
+
+\textbf{Execution flow:}
+\begin{enumerate}
+  \item Retrieve \texttt{MCParticles} from the PODIO frame.
+  \item Loop over all particles. For each $\Lambda$ with 2 parents:
+        fill \texttt{LambdaEnd} histograms and \texttt{LambdaAngleGen}.
+        If the particle is in the field-free window and is not the
+        primary Lambda (index $\neq 4$), print a diagnostic.
+  \item For all particles: fill \texttt{LambdaGenZ}.
+  \item Select primary Lambda (index = \texttt{LAMBDA\_PRIMARY\_IDX}).
+        If no daughters: fill \texttt{LambdaZnoDaughters},
+        increment \texttt{lambda\_escaped}, skip.
+  \item Apply $z$ window cut. Increment
+        \texttt{lambda\_before\_magnet} or \texttt{lambda\_beyond\_zdc}
+        accordingly.
+  \item Increment \texttt{lambda\_field\_free}.
+  \item Check daughter PDGs to identify channel. Increment
+        \texttt{lambda\_neutral} + fill neutral histograms + skip, or
+        \texttt{lambda\_other\_ndau} + skip, as appropriate.
+  \item For the charged channel: increment \texttt{lambda\_charged},
+        fill \texttt{LambdaEnd\_analysis}.
+  \item Daughter loop: compute \texttt{DaughterKin} for $p$ and $\pi^-$,
+        fill all daughter histograms.
+  \item If both daughters found: fill correlation histograms
+        (\texttt{DeltaR}, \texttt{OpenAngle}, etc.).
+  \item Tracker study (if $\alpha > 10^{-6}$\,rad):
+        \begin{enumerate}
+          \item Fill \texttt{DeltaR\_pl\{i\}} and \texttt{DeltaR\_pl\{i\}\_zoom}
+                for each plane.
+          \item For each scenario: find \texttt{first\_plane} where
+                $\Delta R > \sx$. If none: skip.
+          \item Compute \texttt{sigma\_theta\_eff}, $D_\text{eff}$, $\sigma_z$.
+                Fill analytical histograms.
+          \item Smear slopes with $\mathcal{G}(0, \sigma_\theta)$.
+                Reconstruct $z_\text{reco}$ via PCA. Set \texttt{reco\_ok}
+                flag only when the PCA succeeded (not the fallback).
+          \item Fill \texttt{ResZ}, \texttt{ResAlpha}, \texttt{ResZ\_vsAlpha},
+                \texttt{ZReco}. If \texttt{reco\_ok}: also fill
+                \texttt{SmearEff\_thr\{j\}} and \texttt{ResZ\_rms\_vsAlpha}.
+        \end{enumerate}
+\end{enumerate}
+
+\subsection{\texttt{process\_file(filename, events\_limit)}}
+
+Sets \texttt{current\_file = filename}, opens one PODIO ROOT file,
+calls \texttt{process\_event()} for each entry up to \texttt{events\_limit}
+($-1$ = all). Wrapped in try/catch.
+
+\subsection{\texttt{plot()}}
+
+Creates diagnostic and particle analysis canvases. Returns a
+\texttt{vector<TCanvas*>} for \texttt{save\_plots()}.
+
+\subsection{\texttt{save\_plots(pages, output\_name)}}
+
+Writes a canvas vector to a multi-page PDF using ROOT's
+\texttt{Print("name.pdf(")} / \texttt{Print("name.pdf")} /
+\texttt{Print("name.pdf)")} pattern.
+
+\subsection{\texttt{plot\_tracker\_study()}}
+
+Creates all 12 tracker study canvases. Returns a
+\texttt{vector<TCanvas*>} for \texttt{save\_tracker\_study()}.
+
+The 12 pages in order:
+\begin{enumerate}
+  \item $\Delta R$ at each tracker plane (2$\times$2)
+  \item $\Delta R$ zoomed overlay [0--3\,mm], all planes
+  \item $\sigma_z$ distributions overlay (analytical)
+  \item $\sigma_\alpha$ distributions overlay (analytical)
+  \item $\sigma_z$ vs $\alpha$ per scenario (3$\times$2)
+  \item $\sigma_z$ vs $D_\text{eff}$ per scenario (3$\times$2)
+  \item Summary: mean $\sigma_z$ + analytical efficiency curves
+  \item $z_\text{reco}$ distributions + precision smearing efficiency
+  \item $\Delta z$ residuals overlay
+  \item $\Delta\alpha$ residuals overlay
+  \item $\Delta z$ vs $\alpha$ per scenario (3$\times$2)
+  \item Validation: RMS($\Delta z$) vs analytical $\sigma_z$ per $\alpha$ bin
+\end{enumerate}
+
+\subsection{\texttt{save\_tracker\_study(pages)}}
+
+Writes the tracker canvas vector to \texttt{tracker\_study\_18x275.pdf}.
+
+\subsection{\texttt{save\_histograms(rootfile)}}
+
+Opens a ROOT file in RECREATE mode and writes every histogram in
+\texttt{H} with \texttt{->Write()}. Called automatically from
+\texttt{lambda\_analysis()}. To reopen later:
+\begin{lstlisting}
+TFile* f = TFile::Open("lambda_analysis_18x275.root");
+f->ls();                          // list all histograms
+TH1F* h = (TH1F*)f->Get("DeltaR");
+h->Draw();
+\end{lstlisting}
+
+\subsection{\texttt{lambda\_analysis(events\_limit = -1)}}
+
+Entry point. Calls in order:
+\begin{enumerate}
+  \item \texttt{book\_histograms()}
+  \item \texttt{process\_file()} for each of the \texttt{N\_FILES} input files
+  \item \texttt{counters.print()}
+  \item \texttt{save\_histograms("lambda\_analysis\_18x275.root")}
+  \item \texttt{plot()} + \texttt{save\_plots()} $\to$ analysis PDF
+  \item \texttt{plot\_tracker\_study()} + \texttt{save\_tracker\_study()} $\to$ tracker PDF
+\end{enumerate}
+
+%=============================================================
+\section{Event Selection Logic}
+%=============================================================
+
+Applied in \texttt{process\_event()} in order:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{lp{9cm}}
+\toprule
+Cut & Reason \\
+\midrule
+$\texttt{PDG} = 3122$ & Select $\Lambda$ baryons \\
+2 parents & Select from primary interaction vertex \\
+Index $= 4$ & Select primary $\Lambda$ from hard scatter \\
+$\texttt{getDaughters().size()} > 0$ & Lambda must have decayed \\
+$z_v \in (20800, 35000)\,\text{mm}$ & Field-free decay window \\
+Exactly 2 daughters & Charged channel only \\
+Daughters are $p + \pi^-$ & Confirmed by PDG code check \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{How to add a new cut}
+
+\begin{enumerate}
+  \item Add a counter to \texttt{struct Counters} for the rejected events.
+  \item In \texttt{process\_event()}, add the cut condition with
+        \texttt{continue} to skip the event.
+  \item Increment the counter before \texttt{continue}.
+  \item Add the counter to \texttt{Counters::print()}.
+\end{enumerate}
+
+Example --- adding a minimum $\alpha$ cut of 2\,mrad:
+\begin{lstlisting}
+// In struct Counters:
+int lambda_small_alpha = 0;
+
+// In process_event(), after computing alpha:
+if (alpha * M_PI / 180.0 < 2e-3) {
+    counters.lambda_small_alpha++;
+    continue;
+}
+
+// In Counters::print():
+fmt::print("    Small alpha (< 2 mrad)   : {:6d}\n", lambda_small_alpha);
+\end{lstlisting}
+
+%=============================================================
+\section{How to Modify the Analysis}
+%=============================================================
+
+\subsection{Add a new tracker pitch scenario}
+
+\begin{enumerate}
+  \item Add the pitch value to \texttt{Tracker::SIGMA\_X[]}
+  \item Increment \texttt{Tracker::N\_SC} by 1
+  \item Add a label to \texttt{Tracker::LABELS[]}
+\end{enumerate}
+All histogram booking, filling, and plotting loops use \texttt{N\_SC}
+and update automatically.
+
+\subsection{Change the primary efficiency threshold}
+
+Change \texttt{Tracker::PRIMARY\_THRESH} to the index of the desired
+threshold in \texttt{EFF\_THRESH[]}. The summary plot and comparison
+table update automatically.
+
+\subsection{Change the decay region}
+
+Edit \texttt{Cuts::DECAY\_Z\_MIN} and \texttt{Cuts::DECAY\_Z\_MAX}.
+All cuts, histograms, and efficiency calculations use these constants.
+
+\subsection{Process a different beam energy}
+
+Change \texttt{Cuts::N\_FILES}, \texttt{Cuts::FILE\_PATTERN}, and
+\texttt{Tracker::OUTPUT\_PDF}. Run \texttt{lambda\_analysis()} and
+the new files will be processed.
+
+\subsection{Quick test run}
+\begin{lstlisting}
+root [0] lambda_analysis(100)   // 100 events per file
+\end{lstlisting}
+
+%=============================================================
+\section{How Histograms Are Saved}
+%=============================================================
+
+\subsection{To ROOT file}
+
+\texttt{save\_histograms()} iterates over the entire map \texttt{H}
+and calls \texttt{->Write()} on every entry. This happens automatically
+--- no histogram needs to be explicitly listed. Any histogram booked in
+\texttt{book\_histograms()} is saved.
+
+\subsection{To PDF}
+
+Both \texttt{save\_plots()} and \texttt{save\_tracker\_study()} use the
+same pattern:
+\begin{lstlisting}
+// Open the PDF
+pages[0]->Print("output.pdf(");
+// Append middle pages
+for (int i = 1; i < (int)pages.size()-1; ++i)
+    pages[i]->Print("output.pdf");
+// Close the PDF
+pages.back()->Print("output.pdf)");
+\end{lstlisting}
+Canvases are accumulated in a \texttt{vector<TCanvas*>} inside
+\texttt{plot()} or \texttt{plot\_tracker\_study()} and passed to the
+save function.
+
+To add a new page to the tracker PDF, add a new canvas block in
+\texttt{plot\_tracker\_study()} before \texttt{return pages;} and call
+\texttt{pages.push\_back(c)} at the end of the block.
+
+%=============================================================
+\section{Known Limitations}
+%=============================================================
+
+\begin{itemize}
+  \item \textbf{No background.} All efficiencies are upper bounds.
+  \item \textbf{No momentum measurement.} The tracker alone cannot
+        reconstruct the $\Lambda$ invariant mass.
+  \item \textbf{No multiple scattering.} Thin silicon assumed.
+  \item \textbf{Conservative $N_\text{eff}$ model.} Events where tracks
+        first separate at the last plane are treated as unresolvable.
+  \item \textbf{\texttt{LAMBDA\_PRIMARY\_IDX = 4} is generator-dependent.}
+        Verify for new simulation configurations.
+  \item \textbf{Smearing uses Gaussian noise only.} Real detector effects
+        (dead channels, misalignment, hadronic interactions in material)
+        are not modelled.
+\end{itemize}
+
+\end{document}
