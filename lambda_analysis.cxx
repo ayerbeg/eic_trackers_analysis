@@ -41,6 +41,7 @@
 // daughters now filled in a dedicated block before the charged-channel cut; diagnostic
 // canvas expanded to 2x3 with overlay of field-free vs analysis sample (pad 5) and
 // clean analysis-sample distribution (pad 6).
+//
 // ============================================================================
 
 #ifdef __CLING__
@@ -395,7 +396,7 @@ void book_histograms() {
     H["Endpoint_p"]  = new TH1F("Endpoint_p",
         "Proton endpoint z;z_{end} (mm);Count",                1000, 0, 35000);
     H["Theta_p"]     = new TH1F("Theta_p",
-        "Proton polar angle;#theta (deg);Count",                100, 0, 10);
+        "Proton polar angle;#theta (mrad);Count",                100, 0, 100);
     // Lab frame: centred near x ~ -875 mm due to 25 mrad crossing angle
     H["XYatZDC_p"]   = new TH2F("XYatZDC_p",
         "Projected XY at ZDC (p) [lab];X (mm);Y (mm)",         100,-1200,-600, 100,-300, 300);
@@ -413,7 +414,7 @@ void book_histograms() {
     H["Endpoint_pi"]  = new TH1F("Endpoint_pi",
         "#pi^{-} endpoint z;z_{end} (mm);Count",               1000, 0, 35000);
     H["Theta_pi"]     = new TH1F("Theta_pi",
-        "#pi^{-} polar angle;#theta (deg);Count",               100, 0, 10);
+        "#pi^{-} polar angle;#theta (mrad);Count",               100, 0, 100);
     // Lab frame: centred near x ~ -875 mm due to 25 mrad crossing angle
     H["XYatZDC_pi"]   = new TH2F("XYatZDC_pi",
         "Projected XY at ZDC (#pi^{-}) [lab];X (mm);Y (mm)",   100,-1200,-600, 100,-300, 300);
@@ -758,7 +759,7 @@ void process_event(const podio::Frame& event, int event_number) {
                     kin_p.compute(mom.x, mom.y, mom.z, xv, yv, zv, Cuts::ZDC_Z, Cuts::CROSSING_ANGLE);
                     h1("Vertex_p")    ->Fill(daughter.getVertex().z);
                     h1("Endpoint_p")  ->Fill(daughter.getEndpoint().z);
-                    h1("Theta_p")     ->Fill(kin_p.theta);
+                    h1("Theta_p")     ->Fill(kin_p.theta*M_PI/180.0 *1000);
                     h2("XYatZDC_p")   ->Fill(kin_p.xAtZDC,  kin_p.yAtZDC);   // lab frame
                     h2("XYatZDC_p_BC")->Fill(kin_p.xBC,     kin_p.yBC);       // beam-centred
                     h2("ZvsTheta_p")  ->Fill(kin_p.theta,   Cuts::ZDC_Z - zv);
@@ -769,7 +770,7 @@ void process_event(const podio::Frame& event, int event_number) {
                     kin_pi.compute(mom.x, mom.y, mom.z, xv, yv, zv, Cuts::ZDC_Z, Cuts::CROSSING_ANGLE);
                     h1("Vertex_pi")   ->Fill(daughter.getVertex().z);
                     h1("Endpoint_pi") ->Fill(daughter.getEndpoint().z);
-                    h1("Theta_pi")    ->Fill(kin_pi.theta);
+                    h1("Theta_pi")    ->Fill(kin_pi.theta*M_PI/180.0 *1000);
                     h2("XYatZDC_pi")   ->Fill(kin_pi.xAtZDC, kin_pi.yAtZDC);  // lab frame
                     h2("XYatZDC_pi_BC")->Fill(kin_pi.xBC,    kin_pi.yBC);      // beam-centred
                     h2("ZvsTheta_pi") ->Fill(kin_pi.theta,    Cuts::ZDC_Z - zv);
@@ -1683,7 +1684,14 @@ vector<TCanvas*> plot_tracker_study() {
     {
         const double N_charged = 1324.0;
         const double N_neutral =  721.0;
-        const double C0 = N_charged / (N_charged + N_neutral);
+   //     const double C0 = N_charged / (N_charged + N_neutral);
+
+    // C0 = 44.3% from back-of-envelope estimate using Table 8.18 of the
+    // EIC Yellow Report, weighted by estimated ZDC geometric acceptance
+    // per decay region. Not computed from our MC — a full simulation of
+    // the beamline and magnetic lattice would be needed for a precise value.
+        const double C0 = 0.443;
+
 
         TCanvas* c = make_canvas("cContamination",
             "Residual charged-channel contamination after tracker veto", 2, 2);
@@ -1727,6 +1735,8 @@ vector<TCanvas*> plot_tracker_study() {
                 g->SetMarkerColor(thr_colors[j]); g->SetLineColor(thr_colors[j]);
                 g->SetLineWidth(thr_width[j]);
                 g->Draw(first ? "APL" : "PL SAME");
+                // I can set the y-axis range fixed here, but if the data set changes 
+                // this could change similarly. Better change it in the output canvas 
                 if (first) { g->GetYaxis()->SetRangeUser(0.0, C0*100.0*1.15); first=false; }
                 leg->AddEntry(g, lbl.c_str(), "lp");
             }
@@ -1824,8 +1834,11 @@ vector<TCanvas*> plot_tracker_study() {
 
         // Print contamination table to stdout
         fmt::print("\n===== Residual contamination after tracker veto =====\n");
-        fmt::print("  N_charged={:.0f}  N_neutral={:.0f}  C0={:.1f}%\n",
-                   N_charged, N_neutral, C0*100.0);
+//        fmt::print("  N_charged={:.0f}  N_neutral={:.0f}  C0={:.1f}%\n",
+//                 N_charged, N_neutral, C0*100.0);
+
+        fmt::print("  C0={:.1f}% (external estimate, Table 8.18 EIC Yellow Report)\n",
+           C0*100.0);
         fmt::print("  {:>10s}", "sigma_x");
         for (int j = 0; j < Tracker::N_THRESH; ++j)
             fmt::print("  {:>10s}  {:>10s}",
